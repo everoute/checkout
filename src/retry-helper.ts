@@ -1,6 +1,6 @@
 import * as core from '@actions/core'
 
-const defaultMaxAttempts = 3
+const defaultMaxAttempts = 10
 const defaultMinSeconds = 10
 const defaultMaxSeconds = 20
 
