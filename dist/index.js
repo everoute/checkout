@@ -2263,7 +2263,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.RetryHelper = void 0;
 exports.execute = execute;
 const core = __importStar(__nccwpck_require__(2186));
-const defaultMaxAttempts = 3;
+const defaultMaxAttempts = 10;
 const defaultMinSeconds = 10;
 const defaultMaxSeconds = 20;
 class RetryHelper {
