@@ -1,4 +1,5 @@
 import * as core from '@actions/core'
+import * as exec from '@actions/exec'
 import * as fs from 'fs'
 import * as gitAuthHelper from '../lib/git-auth-helper'
 import * as io from '@actions/io'
@@ -20,12 +21,16 @@ let tempHomedir: string
 let git: IGitCommandManager & {env: {[key: string]: string}}
 let settings: IGitSourceSettings
 let sshPath: string
+let sshKeygenPath: string
 let githubServerUrl: string
+
+const sshPublicKey = 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtest'
 
 describe('git-auth-helper tests', () => {
   beforeAll(async () => {
     // SSH
     sshPath = await io.which('ssh')
+    sshKeygenPath = await io.which('ssh-keygen')
 
     // Clear test workspace
     await io.rmRF(testWorkspace)
@@ -40,6 +45,13 @@ describe('git-auth-helper tests', () => {
     jest.spyOn(core, 'warning').mockImplementation(jest.fn())
     jest.spyOn(core, 'info').mockImplementation(jest.fn())
     jest.spyOn(core, 'debug').mockImplementation(jest.fn())
+
+    // Mock public key generation
+    jest.spyOn(exec, 'getExecOutput').mockResolvedValue({
+      exitCode: 0,
+      stdout: `${sshPublicKey}\n`,
+      stderr: ''
+    })
 
     // Mock state helper
     jest.spyOn(stateHelper, 'setSshKeyPath').mockImplementation(jest.fn())
@@ -327,11 +339,11 @@ describe('git-auth-helper tests', () => {
   })
 
   const configureAuth_writesSshKeyAndImplicitKnownHosts =
-    'writes SSH key and implicit known hosts'
+    'writes SSH key, public key, and implicit known hosts'
   it(configureAuth_writesSshKeyAndImplicitKnownHosts, async () => {
-    if (!sshPath) {
+    if (!sshPath || !sshKeygenPath) {
       process.stdout.write(
-        `Skipped test "${configureAuth_writesSshKeyAndImplicitKnownHosts}". Executable 'ssh' not found in the PATH.\n`
+        `Skipped test "${configureAuth_writesSshKeyAndImplicitKnownHosts}". OpenSSH executables not found in the PATH.\n`
       )
       return
     }
@@ -357,6 +369,23 @@ describe('git-auth-helper tests', () => {
       expect((await fs.promises.stat(actualSshKeyPath)).mode & 0o777).toBe(
         0o600
       )
+    }
+
+    // Assert SSH public key
+    const actualSshPublicKeyPath = `${actualSshKeyPath}.pub`
+    const actualSshPublicKeyContent = (
+      await fs.promises.readFile(actualSshPublicKeyPath)
+    ).toString()
+    expect(actualSshPublicKeyContent).toBe(`${sshPublicKey}\n`)
+    expect(exec.getExecOutput).toHaveBeenCalledWith(
+      sshKeygenPath,
+      ['-y', '-f', actualSshKeyPath],
+      {ignoreReturnCode: true, silent: true}
+    )
+    if (!isWindows) {
+      expect(
+        (await fs.promises.stat(actualSshPublicKeyPath)).mode & 0o777
+      ).toBe(0o644)
     }
 
     // Assert known hosts
@@ -600,9 +629,9 @@ describe('git-auth-helper tests', () => {
 
   const removeAuth_removesSshCommand = 'removeAuth removes SSH command'
   it(removeAuth_removesSshCommand, async () => {
-    if (!sshPath) {
+    if (!sshPath || !sshKeygenPath) {
       process.stdout.write(
-        `Skipped test "${removeAuth_removesSshCommand}". Executable 'ssh' not found in the PATH.\n`
+        `Skipped test "${removeAuth_removesSshCommand}". OpenSSH executables not found in the PATH.\n`
       )
       return
     }
@@ -620,6 +649,8 @@ describe('git-auth-helper tests', () => {
     const actualKeyPath = await getActualSshKeyPath()
     expect(actualKeyPath).toBeTruthy()
     await fs.promises.stat(actualKeyPath)
+    const actualPublicKeyPath = `${actualKeyPath}.pub`
+    await fs.promises.stat(actualPublicKeyPath)
     const actualKnownHostsPath = await getActualSshKnownHostsPath()
     expect(actualKnownHostsPath).toBeTruthy()
     await fs.promises.stat(actualKnownHostsPath)
@@ -637,6 +668,16 @@ describe('git-auth-helper tests', () => {
     try {
       await fs.promises.stat(actualKeyPath)
       throw new Error('SSH key should have been deleted')
+    } catch (err) {
+      if ((err as any)?.code !== 'ENOENT') {
+        throw err
+      }
+    }
+
+    // Assert SSH public key file
+    try {
+      await fs.promises.stat(actualPublicKeyPath)
+      throw new Error('SSH public key should have been deleted')
     } catch (err) {
       if ((err as any)?.code !== 'ENOENT') {
         throw err
@@ -829,28 +870,19 @@ async function setup(testName: string): Promise<void> {
 }
 
 async function getActualSshKeyPath(): Promise<string> {
-  let actualTempFiles = (await fs.promises.readdir(runnerTemp))
+  const actualTempFiles = (await fs.promises.readdir(runnerTemp))
     .sort()
     .map(x => path.join(runnerTemp, x))
-  if (actualTempFiles.length === 0) {
-    return ''
-  }
-
-  expect(actualTempFiles).toHaveLength(2)
-  expect(actualTempFiles[0].endsWith('_known_hosts')).toBeFalsy()
-  return actualTempFiles[0]
+  return (
+    actualTempFiles.find(
+      x => !x.endsWith('.pub') && !x.endsWith('_known_hosts')
+    ) || ''
+  )
 }
 
 async function getActualSshKnownHostsPath(): Promise<string> {
-  let actualTempFiles = (await fs.promises.readdir(runnerTemp))
+  const actualTempFiles = (await fs.promises.readdir(runnerTemp))
     .sort()
     .map(x => path.join(runnerTemp, x))
-  if (actualTempFiles.length === 0) {
-    return ''
-  }
-
-  expect(actualTempFiles).toHaveLength(2)
-  expect(actualTempFiles[1].endsWith('_known_hosts')).toBeTruthy()
-  expect(actualTempFiles[1].startsWith(actualTempFiles[0])).toBeTruthy()
-  return actualTempFiles[1]
+  return actualTempFiles.find(x => x.endsWith('_known_hosts')) || ''
 }

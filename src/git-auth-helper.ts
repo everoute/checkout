@@ -228,6 +228,26 @@ class GitAuthHelper {
       await exec.exec(`"${icacls}" "${this.sshKeyPath}" /inheritance:r`)
     }
 
+    // OpenSSH uses a sibling public key to offer the identity before signing.
+    const sshKeygen = await io.which('ssh-keygen')
+    if (sshKeygen) {
+      const publicKey = await exec.getExecOutput(
+        sshKeygen,
+        ['-y', '-f', this.sshKeyPath],
+        {ignoreReturnCode: true, silent: true}
+      )
+      if (publicKey.exitCode === 0 && publicKey.stdout.trim()) {
+        await fs.promises.writeFile(
+          `${this.sshKeyPath}.pub`,
+          publicKey.stdout.trim() + '\n',
+          {mode: 0o644}
+        )
+      } else {
+        core.debug(publicKey.stderr.trim())
+        core.warning('Failed to generate the SSH public key')
+      }
+    }
+
     // Write known hosts
     const userKnownHostsPath = path.join(os.homedir(), '.ssh', 'known_hosts')
     let userKnownHosts = ''
@@ -322,11 +342,13 @@ class GitAuthHelper {
     // SSH key
     const keyPath = this.sshKeyPath || stateHelper.SshKeyPath
     if (keyPath) {
-      try {
-        await io.rmRF(keyPath)
-      } catch (err) {
-        core.debug(`${(err as any)?.message ?? err}`)
-        core.warning(`Failed to remove SSH key '${keyPath}'`)
+      for (const keyFile of [keyPath, `${keyPath}.pub`]) {
+        try {
+          await io.rmRF(keyFile)
+        } catch (err) {
+          core.debug(`${(err as any)?.message ?? err}`)
+          core.warning(`Failed to remove SSH key '${keyFile}'`)
+        }
       }
     }
 
