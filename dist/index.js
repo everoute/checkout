@@ -314,6 +314,18 @@ class GitAuthHelper {
                 yield exec.exec(`"${icacls}" "${this.sshKeyPath}" /grant:r "${process.env['USERDOMAIN']}\\${process.env['USERNAME']}:F"`);
                 yield exec.exec(`"${icacls}" "${this.sshKeyPath}" /inheritance:r`);
             }
+            // OpenSSH uses a sibling public key to offer the identity before signing.
+            const sshKeygen = yield io.which('ssh-keygen');
+            if (sshKeygen) {
+                const publicKey = yield exec.getExecOutput(sshKeygen, ['-y', '-f', this.sshKeyPath], { ignoreReturnCode: true, silent: true });
+                if (publicKey.exitCode === 0 && publicKey.stdout.trim()) {
+                    yield fs.promises.writeFile(`${this.sshKeyPath}.pub`, publicKey.stdout.trim() + '\n', { mode: 0o644 });
+                }
+                else {
+                    core.debug(publicKey.stderr.trim());
+                    core.warning('Failed to generate the SSH public key');
+                }
+            }
             // Write known hosts
             const userKnownHostsPath = path.join(os.homedir(), '.ssh', 'known_hosts');
             let userKnownHosts = '';
@@ -387,12 +399,14 @@ class GitAuthHelper {
             // SSH key
             const keyPath = this.sshKeyPath || stateHelper.SshKeyPath;
             if (keyPath) {
-                try {
-                    yield io.rmRF(keyPath);
-                }
-                catch (err) {
-                    core.debug(`${(_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : err}`);
-                    core.warning(`Failed to remove SSH key '${keyPath}'`);
+                for (const keyFile of [keyPath, `${keyPath}.pub`]) {
+                    try {
+                        yield io.rmRF(keyFile);
+                    }
+                    catch (err) {
+                        core.debug(`${(_a = err === null || err === void 0 ? void 0 : err.message) !== null && _a !== void 0 ? _a : err}`);
+                        core.warning(`Failed to remove SSH key '${keyFile}'`);
+                    }
                 }
             }
             // SSH known hosts
